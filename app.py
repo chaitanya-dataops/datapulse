@@ -50,6 +50,9 @@ from utils.anomaly_detector import (
     exponential_smoothing_forecast,
     multivariate_anomaly_score
 )
+from utils.column_profiler import profile_column, profile_dataframe
+from utils.history_store import HistoryStore, generate_mock_history
+from utils.notifications import SlackNotifier, generate_alert_html
 
 # Page configuration
 st.set_page_config(
@@ -241,14 +244,17 @@ def main():
     st.markdown("---")
     
     # Create tabs for different monitoring features
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
         "📈 Volume & Nulls",
         "🔄 Schema Changes", 
         "⏰ Freshness",
         "📊 Distribution",
         "🔍 Duplicates",
         "✅ Custom Rules",
-        "🤖 ML Detection"
+        "🤖 ML Detection",
+        "📋 Column Profiler",
+        "📜 History",
+        "🔔 Alerts"
     ])
     
     # ==================== TAB 1: Volume & Nulls ====================
@@ -872,6 +878,268 @@ def main():
                 st.metric("Next Period", f"{forecast_result['forecast_values'][0]:,.0f}")
                 st.metric("Trend", forecast_result["trend"].upper())
                 st.metric("Last Actual", f"{forecast_result['last_actual']:,.0f}")
+    
+    # ==================== TAB 8: Column Profiler ====================
+    with tab8:
+        st.subheader("📋 Column Profiler")
+        st.markdown("*Detailed statistics and quality analysis for each column*")
+        
+        # Create sample data for profiling
+        profile_df = generate_mock_rule_test_data()
+        
+        # Profile all columns
+        if st.button("🔍 Profile All Columns", key="profile_all"):
+            with st.spinner("Analyzing columns..."):
+                full_profile = profile_dataframe(profile_df)
+                st.session_state["column_profile"] = full_profile
+        
+        if "column_profile" in st.session_state:
+            profile = st.session_state["column_profile"]
+            
+            # Overall stats
+            st.markdown("### 📊 Dataset Overview")
+            ov = profile["overall"]
+            
+            m1, m2, m3, m4 = st.columns(4)
+            with m1:
+                st.metric("Rows", f"{ov['row_count']:,}")
+            with m2:
+                st.metric("Columns", ov['column_count'])
+            with m3:
+                st.metric("Quality Score", f"{ov['quality_score']}/100")
+            with m4:
+                st.metric("Null %", f"{ov['null_pct']}%")
+            
+            # Column type distribution
+            st.markdown("### 📈 Column Types")
+            type_df = pd.DataFrame([
+                {"Type": k.title(), "Count": v}
+                for k, v in ov.get("column_types", {}).items()
+            ])
+            if not type_df.empty:
+                fig_types = px.pie(type_df, values="Count", names="Type", hole=0.4)
+                fig_types.update_layout(height=250)
+                st.plotly_chart(fig_types, use_container_width=True)
+            
+            # Per-column profiles
+            st.markdown("### 🔍 Column Details")
+            
+            for col_name, col_profile in profile["columns"].items():
+                quality_color = "🟢" if col_profile["quality_score"] >= 80 else "🟡" if col_profile["quality_score"] >= 60 else "🔴"
+                
+                with st.expander(f"{quality_color} {col_name} ({col_profile['inferred_type']})"):
+                    c1, c2, c3 = st.columns(3)
+                    with c1:
+                        st.metric("Quality Score", f"{col_profile['quality_score']}/100")
+                        st.metric("Null %", f"{col_profile['null_pct']}%")
+                    with c2:
+                        st.metric("Distinct Values", f"{col_profile['distinct_count']:,}")
+                        st.metric("Distinct %", f"{col_profile['distinct_pct']}%")
+                    with c3:
+                        st.metric("Data Type", col_profile['dtype'])
+                        st.metric("Is Unique", "✅" if col_profile['is_unique'] else "❌")
+                    
+                    # Type-specific stats
+                    if col_profile['inferred_type'] == 'numeric':
+                        st.markdown("**Numeric Statistics:**")
+                        stats_df = pd.DataFrame([{
+                            "Mean": col_profile.get('mean'),
+                            "Std": col_profile.get('std'),
+                            "Min": col_profile.get('min'),
+                            "Max": col_profile.get('max'),
+                            "Median": col_profile.get('median')
+                        }])
+                        st.dataframe(stats_df, use_container_width=True)
+                        
+                        if col_profile.get('outlier_count', 0) > 0:
+                            st.warning(f"⚠️ {col_profile['outlier_count']} outliers detected ({col_profile['outlier_pct']}%)")
+                    
+                    # Quality issues
+                    issues = col_profile.get('quality_issues', [])
+                    if issues:
+                        st.markdown("**⚠️ Quality Issues:**")
+                        for issue in issues:
+                            st.error(issue)
+                    
+                    # Top values
+                    if col_profile.get('top_values'):
+                        st.markdown("**Top Values:**")
+                        top_df = pd.DataFrame(col_profile['top_values'])
+                        st.dataframe(top_df, use_container_width=True)
+        else:
+            st.info("Click 'Profile All Columns' to analyze the data")
+    
+    # ==================== TAB 9: History ====================
+    with tab9:
+        st.subheader("📜 Historical Dashboard")
+        st.markdown("*Track anomalies and health scores over time*")
+        
+        # Generate mock historical data for demo
+        history_data = generate_mock_history(selected_table, days=30)
+        history_df = pd.DataFrame(history_data)
+        history_df["timestamp"] = pd.to_datetime(history_df["timestamp"])
+        
+        # Summary metrics
+        st.markdown("### 📊 30-Day Summary")
+        h1, h2, h3, h4 = st.columns(4)
+        
+        with h1:
+            avg_score = history_df["health_score"].mean()
+            st.metric("Avg Health Score", f"{avg_score:.0f}")
+        with h2:
+            min_score = history_df["health_score"].min()
+            st.metric("Lowest Score", f"{min_score}")
+        with h3:
+            total_anomalies = history_df["anomaly_count"].sum()
+            st.metric("Total Anomalies", f"{total_anomalies}")
+        with h4:
+            healthy_days = (history_df["status"] == "Healthy").sum()
+            st.metric("Healthy Days", f"{healthy_days}/30")
+        
+        # Health score trend
+        st.markdown("### 📈 Health Score Trend")
+        fig_trend = go.Figure()
+        
+        fig_trend.add_trace(go.Scatter(
+            x=history_df["timestamp"],
+            y=history_df["health_score"],
+            mode="lines+markers",
+            name="Health Score",
+            line=dict(color="#1f77b4", width=2),
+            fill="tozeroy",
+            fillcolor="rgba(31, 119, 180, 0.1)"
+        ))
+        
+        # Add threshold lines
+        fig_trend.add_hline(y=80, line_dash="dash", line_color="green", annotation_text="Healthy")
+        fig_trend.add_hline(y=60, line_dash="dash", line_color="orange", annotation_text="Warning")
+        
+        fig_trend.update_layout(
+            height=350,
+            yaxis=dict(range=[0, 105]),
+            xaxis_title="Date",
+            yaxis_title="Health Score"
+        )
+        st.plotly_chart(fig_trend, use_container_width=True)
+        
+        # Anomaly count over time
+        st.markdown("### 🚨 Anomaly Frequency")
+        fig_anomalies = px.bar(
+            history_df,
+            x="timestamp",
+            y="anomaly_count",
+            color="status",
+            color_discrete_map={"Healthy": "green", "Warning": "orange", "Critical": "red"}
+        )
+        fig_anomalies.update_layout(height=250, showlegend=True)
+        st.plotly_chart(fig_anomalies, use_container_width=True)
+        
+        # Recent incidents
+        st.markdown("### 📋 Recent Incidents")
+        incidents = history_df[history_df["anomaly_count"] > 0].sort_values("timestamp", ascending=False).head(5)
+        
+        if len(incidents) > 0:
+            for _, row in incidents.iterrows():
+                status_color = "🔴" if row["status"] == "Critical" else "🟠" if row["status"] == "Warning" else "🟢"
+                with st.expander(f"{status_color} {row['timestamp'].strftime('%Y-%m-%d')} - {row['anomaly_count']} anomalies"):
+                    st.metric("Health Score", row["health_score"])
+                    if row["anomalies"]:
+                        for a in row["anomalies"]:
+                            st.write(f"• **{a.get('metric', 'Unknown')}**: {a.get('type', 'anomaly')} ({a.get('severity', 'medium')})")
+        else:
+            st.success("✅ No incidents in the last 30 days!")
+    
+    # ==================== TAB 10: Alerts ====================
+    with tab10:
+        st.subheader("🔔 Alert Configuration")
+        st.markdown("*Set up Slack and Email notifications for anomalies*")
+        
+        alert_col1, alert_col2 = st.columns(2)
+        
+        with alert_col1:
+            st.markdown("### 💬 Slack Alerts")
+            st.markdown("Send real-time alerts to your Slack channel")
+            
+            slack_webhook = st.text_input(
+                "Slack Webhook URL",
+                placeholder="https://hooks.slack.com/services/...",
+                type="password",
+                key="slack_webhook"
+            )
+            
+            slack_enabled = st.checkbox("Enable Slack Alerts", key="slack_enabled")
+            
+            if slack_webhook and st.button("🧪 Test Slack", key="test_slack"):
+                try:
+                    notifier = SlackNotifier(slack_webhook)
+                    success = notifier.send_alert(
+                        title="Test Alert from DataPulse",
+                        message="If you see this, Slack integration is working! 🎉",
+                        severity="low",
+                        fields=[
+                            {"title": "Table", "value": selected_table},
+                            {"title": "Status", "value": "Test"}
+                        ]
+                    )
+                    if success:
+                        st.success("✅ Test alert sent to Slack!")
+                    else:
+                        st.error("❌ Failed to send. Check your webhook URL.")
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+            
+            st.markdown("---")
+            st.markdown("**Alert Conditions:**")
+            slack_on_critical = st.checkbox("Alert on Critical issues", value=True, key="slack_critical")
+            slack_on_warning = st.checkbox("Alert on Warning issues", value=False, key="slack_warning")
+            slack_on_schema = st.checkbox("Alert on Schema changes", value=True, key="slack_schema")
+        
+        with alert_col2:
+            st.markdown("### 📧 Email Reports")
+            st.markdown("Receive daily summary reports via email")
+            
+            email_recipients = st.text_area(
+                "Email Recipients (one per line)",
+                placeholder="team@company.com\nmanager@company.com",
+                height=100,
+                key="email_recipients"
+            )
+            
+            email_enabled = st.checkbox("Enable Email Reports", key="email_enabled")
+            
+            report_frequency = st.selectbox(
+                "Report Frequency",
+                ["Daily", "Weekly", "On Anomaly Only"],
+                key="report_freq"
+            )
+            
+            st.markdown("---")
+            st.markdown("**Email Preview:**")
+            
+            preview_html = generate_alert_html(
+                table_name=selected_table,
+                health_score=health_score,
+                anomalies=row_anomalies + null_anomalies
+            )
+            
+            with st.expander("📄 Preview Email Content"):
+                st.components.v1.html(preview_html, height=400, scrolling=True)
+        
+        # Alert history (mock)
+        st.markdown("---")
+        st.markdown("### 📜 Recent Alerts Sent")
+        
+        alert_history = pd.DataFrame([
+            {"Time": "2026-05-19 10:30", "Type": "Slack", "Table": "orders", "Reason": "Row count drop"},
+            {"Time": "2026-05-18 09:00", "Type": "Email", "Table": "users", "Reason": "Daily report"},
+            {"Time": "2026-05-17 14:22", "Type": "Slack", "Table": "events", "Reason": "Schema change"},
+        ])
+        st.dataframe(alert_history, use_container_width=True)
+        
+        # Save settings
+        st.markdown("---")
+        if st.button("💾 Save Alert Settings", key="save_alerts"):
+            st.success("✅ Alert settings saved! (Demo mode - settings not persisted)")
     
     # Health Score Breakdown
     st.markdown("---")
