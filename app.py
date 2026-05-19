@@ -58,6 +58,7 @@ from utils.data_lineage import generate_mock_lineage, get_lineage_stats
 from utils.sql_rules import SQLRulesEngine, DataQualityRule as SQLRule, get_predefined_rules, generate_rule_from_template
 from utils.drift_detector import DriftDetector, generate_mock_drift_data
 from utils.root_cause import RootCauseAnalyzer, generate_mock_rca_data, get_rca_recommendations
+from utils.data_contracts import DataContract, get_sample_contract, get_contract_templates, parse_contract_yaml
 
 # Page configuration
 st.set_page_config(
@@ -249,7 +250,7 @@ def main():
     st.markdown("---")
     
     # Create tabs for different monitoring features
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16 = st.tabs([
         "📈 Volume & Nulls",
         "🔄 Schema Changes", 
         "⏰ Freshness",
@@ -264,7 +265,8 @@ def main():
         "🌐 Data Lineage",
         "📝 SQL Rules",
         "📉 Drift Detection",
-        "🔬 Root Cause"
+        "🔬 Root Cause",
+        "📄 Data Contracts"
     ])
     
     # ==================== TAB 1: Volume & Nulls ====================
@@ -1536,6 +1538,172 @@ def main():
                 st.write(rec)
         else:
             st.info("Click 'Run Root Cause Analysis' to diagnose anomalies")
+    
+    # ==================== TAB 16: Data Contracts ====================
+    with tab16:
+        st.subheader("📄 Data Contracts")
+        st.markdown("*Define and enforce data quality SLAs using YAML contracts*")
+        
+        # Contract editor
+        st.markdown("### 📝 Contract Editor")
+        
+        # Template selector
+        templates = get_contract_templates()
+        template_choice = st.selectbox(
+            "Start from template:",
+            ["Custom"] + list(templates.keys()),
+            key="contract_template"
+        )
+        
+        # Get initial contract text
+        if template_choice == "Custom":
+            default_contract = get_sample_contract()
+        else:
+            default_contract = templates[template_choice]
+        
+        # Contract YAML editor
+        contract_yaml = st.text_area(
+            "Contract YAML",
+            value=default_contract,
+            height=400,
+            key="contract_yaml"
+        )
+        
+        # Validate and parse
+        col_validate, col_run = st.columns(2)
+        
+        with col_validate:
+            if st.button("✅ Validate Contract", key="validate_contract"):
+                result = parse_contract_yaml(contract_yaml)
+                if result["valid"]:
+                    st.success("✅ Contract YAML is valid!")
+                    st.session_state["parsed_contract"] = result["config"]
+                else:
+                    st.error(f"❌ {result['error']}")
+        
+        with col_run:
+            if st.button("🚀 Run Contract Validation", key="run_contract"):
+                try:
+                    # Parse contract
+                    contract = DataContract(contract_yaml)
+                    
+                    # Get test data
+                    test_df = generate_mock_rule_test_data(selected_table)
+                    
+                    # Run validation
+                    from datetime import datetime, timedelta
+                    last_updated = datetime.now() - timedelta(hours=2)  # Mock freshness
+                    
+                    validation = contract.validate(test_df, last_updated)
+                    st.session_state["contract_validation"] = validation
+                    st.session_state["contract_obj"] = contract
+                    
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+        
+        # Show validation results
+        if "contract_validation" in st.session_state:
+            validation = st.session_state["contract_validation"]
+            contract = st.session_state["contract_obj"]
+            
+            st.markdown("---")
+            st.markdown("### 📊 Validation Results")
+            
+            # Status banner
+            status_colors = {
+                "passing": ("🟢", "green", "All SLAs Passing"),
+                "warning": ("🟡", "orange", "Some Warnings"),
+                "failing": ("🔴", "red", "SLA Violations Detected"),
+                "not_evaluated": ("⚪", "gray", "Not Evaluated")
+            }
+            icon, color, text = status_colors.get(validation.status.value, ("⚪", "gray", "Unknown"))
+            
+            # Summary metrics
+            s1, s2, s3, s4 = st.columns(4)
+            with s1:
+                st.metric("Status", f"{icon} {text}")
+            with s2:
+                st.metric("Score", f"{validation.overall_score}%")
+            with s3:
+                st.metric("Passed", validation.passed_count)
+            with s4:
+                st.metric("Failed", validation.failed_count, 
+                         delta=f"-{validation.failed_count}" if validation.failed_count > 0 else None,
+                         delta_color="inverse")
+            
+            # Contract info
+            st.markdown("### 📋 Contract Info")
+            info_col1, info_col2 = st.columns(2)
+            with info_col1:
+                st.write(f"**Name:** {contract.name}")
+                st.write(f"**Version:** {contract.version}")
+            with info_col2:
+                st.write(f"**Owner:** {contract.owner}")
+                st.write(f"**Dataset:** {contract.dataset.get('name', 'N/A')}")
+            
+            # SLA checks detail
+            st.markdown("### 🔍 SLA Check Details")
+            
+            # Group by SLA type
+            sla_types = {}
+            for check in validation.sla_checks:
+                if check.sla_type not in sla_types:
+                    sla_types[check.sla_type] = []
+                sla_types[check.sla_type].append(check)
+            
+            for sla_type, checks in sla_types.items():
+                passed_in_type = sum(1 for c in checks if c.passed)
+                type_icon = "✅" if passed_in_type == len(checks) else "⚠️" if passed_in_type > 0 else "❌"
+                
+                with st.expander(f"{type_icon} {sla_type.upper()} ({passed_in_type}/{len(checks)} passing)"):
+                    for check in checks:
+                        check_icon = "✅" if check.passed else "❌"
+                        severity_badge = f"[{check.severity.upper()}]"
+                        
+                        st.markdown(f"""
+                        **{check_icon} {check.name}** {severity_badge}
+                        - Expected: `{check.expected}`
+                        - Actual: `{check.actual}`
+                        - {check.message}
+                        """)
+            
+            # Export contract
+            st.markdown("---")
+            st.markdown("### 💾 Export")
+            
+            export_col1, export_col2 = st.columns(2)
+            with export_col1:
+                st.download_button(
+                    "📥 Download Contract YAML",
+                    contract_yaml,
+                    file_name=f"{contract.name}.yaml",
+                    mime="text/yaml"
+                )
+            with export_col2:
+                # Create validation report
+                report = f"""# Contract Validation Report
+Contract: {contract.name}
+Date: {validation.timestamp}
+Status: {validation.status.value.upper()}
+Score: {validation.overall_score}%
+
+## Summary
+- Passed: {validation.passed_count}
+- Failed: {validation.failed_count}
+- Warnings: {validation.warning_count}
+
+## SLA Checks
+"""
+                for check in validation.sla_checks:
+                    status = "PASS" if check.passed else "FAIL"
+                    report += f"- [{status}] {check.name}: {check.message}\n"
+                
+                st.download_button(
+                    "📥 Download Report",
+                    report,
+                    file_name=f"{contract.name}_report.md",
+                    mime="text/markdown"
+                )
     
     # Health Score Breakdown
     st.markdown("---")
