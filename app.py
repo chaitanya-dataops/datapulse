@@ -53,6 +53,11 @@ from utils.anomaly_detector import (
 from utils.column_profiler import profile_column, profile_dataframe
 from utils.history_store import HistoryStore, generate_mock_history
 from utils.notifications import SlackNotifier, generate_alert_html
+from utils.pii_detector import scan_dataframe_for_pii, get_masking_recommendation
+from utils.data_lineage import generate_mock_lineage, get_lineage_stats
+from utils.sql_rules import SQLRulesEngine, DataQualityRule as SQLRule, get_predefined_rules, generate_rule_from_template
+from utils.drift_detector import DriftDetector, generate_mock_drift_data
+from utils.root_cause import RootCauseAnalyzer, generate_mock_rca_data, get_rca_recommendations
 
 # Page configuration
 st.set_page_config(
@@ -244,7 +249,7 @@ def main():
     st.markdown("---")
     
     # Create tabs for different monitoring features
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15 = st.tabs([
         "📈 Volume & Nulls",
         "🔄 Schema Changes", 
         "⏰ Freshness",
@@ -254,7 +259,12 @@ def main():
         "🤖 ML Detection",
         "📋 Column Profiler",
         "📜 History",
-        "🔔 Alerts"
+        "🔔 Alerts",
+        "🔐 PII Detection",
+        "🌐 Data Lineage",
+        "📝 SQL Rules",
+        "📉 Drift Detection",
+        "🔬 Root Cause"
     ])
     
     # ==================== TAB 1: Volume & Nulls ====================
@@ -1140,6 +1150,392 @@ def main():
         st.markdown("---")
         if st.button("💾 Save Alert Settings", key="save_alerts"):
             st.success("✅ Alert settings saved! (Demo mode - settings not persisted)")
+    
+    # ==================== TAB 11: PII Detection ====================
+    with tab11:
+        st.subheader("🔐 PII Detection")
+        st.markdown("*Scan data for personally identifiable information (100% local processing)*")
+        
+        # Use sample data
+        pii_df = generate_mock_rule_test_data(selected_table)
+        
+        if st.button("🔍 Scan for PII", key="scan_pii"):
+            with st.spinner("Scanning for PII patterns..."):
+                pii_results = scan_dataframe_for_pii(pii_df)
+                st.session_state["pii_results"] = pii_results
+        
+        if "pii_results" in st.session_state:
+            results = st.session_state["pii_results"]
+            
+            # Risk overview
+            st.markdown("### 🎯 Risk Overview")
+            risk_col1, risk_col2, risk_col3, risk_col4 = st.columns(4)
+            
+            with risk_col1:
+                risk_color = "🔴" if results["risk_level"] == "Critical" else "🟠" if results["risk_level"] == "High" else "🟡" if results["risk_level"] == "Medium" else "🟢"
+                st.metric("Risk Level", f"{risk_color} {results['risk_level']}")
+            with risk_col2:
+                st.metric("Risk Score", f"{results['risk_score']}/100")
+            with risk_col3:
+                st.metric("PII Columns", results["columns_with_pii"])
+            with risk_col4:
+                st.metric("Total Findings", results["total_findings"])
+            
+            # Risk breakdown chart
+            st.markdown("### 📊 Risk Breakdown")
+            risk_df = pd.DataFrame([
+                {"Level": k.title(), "Count": v}
+                for k, v in results["risk_counts"].items() if v > 0
+            ])
+            if not risk_df.empty:
+                fig_risk = px.bar(risk_df, x="Level", y="Count", 
+                                  color="Level",
+                                  color_discrete_map={"Critical": "red", "High": "orange", "Medium": "yellow", "Low": "green"})
+                fig_risk.update_layout(height=250, showlegend=False)
+                st.plotly_chart(fig_risk, use_container_width=True)
+            
+            # Detailed findings
+            st.markdown("### 🔍 Detailed Findings")
+            
+            for finding in results["findings"]:
+                severity_icon = "🔴" if finding.risk_level == "critical" else "🟠" if finding.risk_level == "high" else "🟡" if finding.risk_level == "medium" else "🟢"
+                
+                with st.expander(f"{severity_icon} {finding.column} - {finding.pii_type}"):
+                    f1, f2, f3 = st.columns(3)
+                    with f1:
+                        st.metric("Matches", f"{finding.sample_count}/{finding.total_values}")
+                    with f2:
+                        st.metric("Match Rate", f"{finding.percentage}%")
+                    with f3:
+                        st.metric("Confidence", finding.confidence.title())
+                    
+                    # Masking recommendation
+                    st.info(f"💡 **Recommendation:** {get_masking_recommendation(finding.pii_type)}")
+        else:
+            st.info("Click 'Scan for PII' to analyze the data for sensitive information")
+    
+    # ==================== TAB 12: Data Lineage ====================
+    with tab12:
+        st.subheader("🌐 Data Lineage")
+        st.markdown("*Visualize data flow and table relationships*")
+        
+        # Generate mock lineage
+        lineage = generate_mock_lineage()
+        lineage_stats = get_lineage_stats(lineage)
+        
+        # Overview metrics
+        st.markdown("### 📊 Lineage Overview")
+        l1, l2, l3, l4 = st.columns(4)
+        with l1:
+            st.metric("Total Tables", lineage_stats["total_tables"])
+        with l2:
+            st.metric("Data Flows", lineage_stats["total_edges"])
+        with l3:
+            st.metric("Max Depth", lineage_stats["max_depth"])
+        with l4:
+            st.metric("Source Tables", len(lineage_stats["root_tables"]))
+        
+        # Schema breakdown
+        st.markdown("### 🗂️ Tables by Layer")
+        schema_df = pd.DataFrame([
+            {"Layer": k.title(), "Tables": v}
+            for k, v in lineage_stats["schema_breakdown"].items()
+        ])
+        fig_schema = px.pie(schema_df, values="Tables", names="Layer", hole=0.4)
+        fig_schema.update_layout(height=300)
+        st.plotly_chart(fig_schema, use_container_width=True)
+        
+        # Lineage graph (Mermaid)
+        st.markdown("### 🔗 Lineage Graph")
+        mermaid_code = lineage.to_mermaid()
+        st.code(mermaid_code, language="mermaid")
+        
+        # Impact analysis
+        st.markdown("### 💥 Impact Analysis")
+        selected_lineage_table = st.selectbox(
+            "Select a table to analyze impact:",
+            list(lineage.nodes.keys()),
+            key="lineage_table"
+        )
+        
+        if selected_lineage_table:
+            impact = lineage.get_impact_analysis(selected_lineage_table)
+            
+            ic1, ic2 = st.columns(2)
+            with ic1:
+                st.metric("Downstream Tables", impact["impact_count"])
+                st.metric("Risk Level", impact["risk_level"].upper())
+            with ic2:
+                st.markdown("**Direct Dependents:**")
+                for dep in impact["direct_dependents"][:5]:
+                    st.write(f"  → {dep}")
+            
+            if impact["all_downstream"]:
+                st.markdown("**Full Impact Chain:**")
+                st.write(" → ".join([selected_lineage_table] + impact["all_downstream"][:8]))
+    
+    # ==================== TAB 13: SQL Rules ====================
+    with tab13:
+        st.subheader("📝 Custom SQL Rules")
+        st.markdown("*Define and execute custom data quality rules*")
+        
+        # Rule builder
+        st.markdown("### ➕ Create New Rule")
+        
+        rule_col1, rule_col2 = st.columns(2)
+        
+        with rule_col1:
+            rule_name = st.text_input("Rule Name", "My Custom Rule", key="rule_name")
+            rule_type = st.selectbox(
+                "Rule Type",
+                ["null_check", "range_check", "regex_check", "uniqueness_check", "custom_condition"],
+                key="rule_type"
+            )
+            rule_column = st.text_input("Column Name", "id", key="rule_column")
+        
+        with rule_col2:
+            rule_severity = st.selectbox("Severity", ["critical", "high", "medium", "low"], key="rule_severity")
+            
+            # Dynamic parameters based on rule type
+            if rule_type == "null_check":
+                max_null = st.number_input("Max Null %", 0, 100, 0, key="max_null")
+                rule_params = {"max_null_pct": max_null}
+            elif rule_type == "range_check":
+                min_val = st.number_input("Min Value", value=0, key="min_val")
+                max_val = st.number_input("Max Value", value=100, key="max_val")
+                rule_params = {"min_value": min_val, "max_value": max_val}
+            elif rule_type == "regex_check":
+                pattern = st.text_input("Regex Pattern", r"^[A-Za-z]+$", key="regex_pattern")
+                rule_params = {"pattern": pattern}
+            else:
+                rule_params = {}
+        
+        # Initialize rules engine
+        if "sql_rules_engine" not in st.session_state:
+            st.session_state["sql_rules_engine"] = SQLRulesEngine()
+            # Add predefined rules
+            for rule in get_predefined_rules():
+                st.session_state["sql_rules_engine"].add_rule(rule)
+        
+        if st.button("➕ Add Rule", key="add_rule"):
+            new_rule = SQLRule(
+                name=rule_name,
+                description=f"Custom {rule_type} rule",
+                rule_type=rule_type,
+                severity=rule_severity,
+                column=rule_column,
+                parameters=rule_params
+            )
+            st.session_state["sql_rules_engine"].add_rule(new_rule)
+            st.success(f"✅ Rule '{rule_name}' added!")
+        
+        # Current rules
+        st.markdown("### 📋 Active Rules")
+        engine = st.session_state["sql_rules_engine"]
+        
+        rules_df = pd.DataFrame([
+            {
+                "Name": r.name,
+                "Type": r.rule_type,
+                "Column": r.column or "N/A",
+                "Severity": r.severity.upper(),
+                "Enabled": "✅" if r.enabled else "❌"
+            }
+            for r in engine.rules
+        ])
+        st.dataframe(rules_df, use_container_width=True)
+        
+        # Execute rules
+        st.markdown("### ▶️ Execute Rules")
+        if st.button("🚀 Run All Rules", key="run_rules"):
+            test_df = generate_mock_rule_test_data(selected_table)
+            
+            with st.spinner("Executing rules..."):
+                results = engine.execute_all_rules(test_df)
+                summary = engine.get_summary()
+            
+            # Summary
+            s1, s2, s3 = st.columns(3)
+            with s1:
+                st.metric("Total Rules", summary["total"])
+            with s2:
+                st.metric("Passed", summary["passed"], delta=None)
+            with s3:
+                st.metric("Failed", summary["failed"], delta=f"-{summary['failed']}" if summary["failed"] > 0 else None)
+            
+            # Results
+            for result in results:
+                icon = "✅" if result.passed else "❌"
+                color = "green" if result.passed else "red"
+                
+                with st.expander(f"{icon} {result.rule_name}"):
+                    st.markdown(f"**Status:** {'PASSED' if result.passed else 'FAILED'}")
+                    st.markdown(f"**Message:** {result.message}")
+                    st.markdown(f"**Rows Checked:** {result.rows_checked:,}")
+                    st.markdown(f"**Failure Rate:** {result.failure_rate:.2f}%")
+                    st.markdown(f"**Execution Time:** {result.execution_time_ms:.2f}ms")
+    
+    # ==================== TAB 14: Drift Detection ====================
+    with tab14:
+        st.subheader("📉 Statistical Drift Detection")
+        st.markdown("*Detect distribution changes using statistical tests (KS-test, Chi-Square, PSI)*")
+        
+        if st.button("🔍 Run Drift Analysis", key="run_drift"):
+            with st.spinner("Analyzing distributions..."):
+                baseline_df, current_df = generate_mock_drift_data(selected_table)
+                detector = DriftDetector(significance_level=0.05)
+                drift_results = detector.detect_drift_dataframe(baseline_df, current_df)
+                drift_summary = detector.get_drift_summary(drift_results)
+                
+                st.session_state["drift_results"] = drift_results
+                st.session_state["drift_summary"] = drift_summary
+        
+        if "drift_results" in st.session_state:
+            summary = st.session_state["drift_summary"]
+            results = st.session_state["drift_results"]
+            
+            # Overview
+            st.markdown("### 📊 Drift Overview")
+            d1, d2, d3, d4 = st.columns(4)
+            with d1:
+                health_color = "🔴" if summary["overall_health"] == "Critical" else "🟠" if summary["overall_health"] == "Warning" else "🟡" if summary["overall_health"] == "Moderate" else "🟢"
+                st.metric("Health", f"{health_color} {summary['overall_health']}")
+            with d2:
+                st.metric("Columns Analyzed", summary["total_columns"])
+            with d3:
+                st.metric("With Drift", summary["columns_with_drift"])
+            with d4:
+                st.metric("Drift Rate", f"{summary['drift_rate']:.1f}%")
+            
+            # Drift heatmap
+            st.markdown("### 🗺️ Drift Scores")
+            drift_scores = pd.DataFrame([
+                {"Column": r.column, "Drift Score": r.drift_score, "Severity": r.severity}
+                for r in results
+            ])
+            
+            fig_drift = px.bar(
+                drift_scores,
+                x="Column",
+                y="Drift Score",
+                color="Severity",
+                color_discrete_map={"critical": "red", "high": "orange", "medium": "yellow", "low": "lightgreen", "none": "green"}
+            )
+            fig_drift.add_hline(y=50, line_dash="dash", line_color="red", annotation_text="High Risk")
+            fig_drift.update_layout(height=350)
+            st.plotly_chart(fig_drift, use_container_width=True)
+            
+            # Detailed results
+            st.markdown("### 🔬 Column Details")
+            
+            for result in results:
+                severity_icon = "🔴" if result.severity == "critical" else "🟠" if result.severity == "high" else "🟡" if result.severity == "medium" else "🟢"
+                
+                with st.expander(f"{severity_icon} {result.column} (Score: {result.drift_score})"):
+                    dc1, dc2 = st.columns(2)
+                    
+                    with dc1:
+                        st.markdown("**Baseline Stats:**")
+                        for k, v in result.baseline_stats.items():
+                            st.write(f"  {k}: {v:.2f}" if isinstance(v, float) else f"  {k}: {v}")
+                    
+                    with dc2:
+                        st.markdown("**Current Stats:**")
+                        for k, v in result.current_stats.items():
+                            st.write(f"  {k}: {v:.2f}" if isinstance(v, float) else f"  {k}: {v}")
+                    
+                    st.markdown(f"**Test Used:** {result.test_used}")
+                    st.markdown(f"**P-Value:** {result.p_value}")
+                    st.info(f"💡 {result.recommendation}")
+        else:
+            st.info("Click 'Run Drift Analysis' to compare baseline vs current distributions")
+    
+    # ==================== TAB 15: Root Cause Analysis ====================
+    with tab15:
+        st.subheader("🔬 Root Cause Analysis")
+        st.markdown("*Automatically identify why anomalies occurred*")
+        
+        if st.button("🔍 Run Root Cause Analysis", key="run_rca"):
+            with st.spinner("Analyzing root causes..."):
+                baseline_df, current_df = generate_mock_rca_data()
+                analyzer = RootCauseAnalyzer()
+                
+                rca_result = analyzer.analyze_anomaly(
+                    baseline_df, current_df,
+                    metric_col="revenue",
+                    dimension_cols=["region", "product", "channel"],
+                    anomaly_type="Revenue Drop"
+                )
+                
+                st.session_state["rca_result"] = rca_result
+        
+        if "rca_result" in st.session_state:
+            result = st.session_state["rca_result"]
+            
+            # Anomaly overview
+            st.markdown("### 🎯 Anomaly Overview")
+            a1, a2, a3 = st.columns(3)
+            with a1:
+                st.metric("Anomaly Type", result.anomaly_type)
+            with a2:
+                st.metric("Expected", f"{result.expected_value:,.0f}")
+            with a3:
+                delta_color = "inverse" if result.deviation_pct < 0 else "normal"
+                st.metric("Actual", f"{result.anomaly_value:,.0f}", 
+                         delta=f"{result.deviation_pct:+.1f}%")
+            
+            # Summary
+            st.markdown("### 📝 Summary")
+            st.info(result.summary)
+            
+            # Root causes
+            st.markdown("### 🔍 Root Causes")
+            
+            if result.root_causes:
+                # Contribution chart
+                causes_df = pd.DataFrame([
+                    {
+                        "Segment": f"{c.dimension}={c.value}",
+                        "Contribution": abs(c.contribution),
+                        "Direction": "Increase" if c.contribution > 0 else "Decrease"
+                    }
+                    for c in result.root_causes
+                ])
+                
+                fig_causes = px.bar(
+                    causes_df,
+                    x="Segment",
+                    y="Contribution",
+                    color="Direction",
+                    color_discrete_map={"Increase": "green", "Decrease": "red"}
+                )
+                fig_causes.update_layout(height=300, yaxis_title="Contribution %")
+                st.plotly_chart(fig_causes, use_container_width=True)
+                
+                # Detailed causes
+                for cause in result.root_causes:
+                    confidence_icon = "🔴" if cause.confidence == "high" else "🟠" if cause.confidence == "medium" else "🟡"
+                    
+                    with st.expander(f"{confidence_icon} {cause.dimension} = '{cause.value}'"):
+                        c1, c2, c3 = st.columns(3)
+                        with c1:
+                            st.metric("Baseline", f"{cause.baseline_value:,.0f}")
+                        with c2:
+                            st.metric("Current", f"{cause.current_value:,.0f}")
+                        with c3:
+                            st.metric("Change", f"{cause.change_pct:+.1f}%")
+                        
+                        st.markdown(f"**Contribution:** {cause.contribution:+.1f}%")
+                        st.markdown(f"**Confidence:** {cause.confidence.upper()}")
+                        st.write(cause.explanation)
+            
+            # Recommendations
+            st.markdown("### 💡 Recommendations")
+            recommendations = get_rca_recommendations(result)
+            for rec in recommendations:
+                st.write(rec)
+        else:
+            st.info("Click 'Run Root Cause Analysis' to diagnose anomalies")
     
     # Health Score Breakdown
     st.markdown("---")
