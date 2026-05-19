@@ -885,7 +885,7 @@ def main():
         st.markdown("*Detailed statistics and quality analysis for each column*")
         
         # Create sample data for profiling
-        profile_df = generate_mock_rule_test_data()
+        profile_df = generate_mock_rule_test_data(selected_table)
         
         # Profile all columns
         if st.button("🔍 Profile All Columns", key="profile_all"):
