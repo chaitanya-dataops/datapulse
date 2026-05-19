@@ -1590,8 +1590,7 @@ def main():
                     # Get test data
                     test_df = generate_mock_rule_test_data(selected_table)
                     
-                    # Run validation
-                    from datetime import datetime, timedelta
+                    # Run validation (datetime already imported at top of file)
                     last_updated = datetime.now() - timedelta(hours=2)  # Mock freshness
                     
                     validation = contract.validate(test_df, last_updated)
