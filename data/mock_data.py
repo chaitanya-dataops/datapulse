@@ -1,5 +1,5 @@
 """
-Mock data generator for testing without BigQuery connection
+Mock data generator for testing and demos
 Enterprise features to compete with Bigeye/Datafold/Anomalo
 """
 import pandas as pd

@@ -44,7 +44,6 @@ This script automatically:
 
 #### Prerequisites
 - Python 3.9+
-- (Optional) GCP account with BigQuery access
 
 #### Installation
 
@@ -80,16 +79,9 @@ The app will open in your browser at `http://localhost:8501`
 ### Demo Mode (Default)
 The app comes with mock data pre-loaded. Just run it and explore!
 
-### Connect to BigQuery (Production)
+### Data Source
 
-1. Copy `.env.example` to `.env`
-2. Fill in your GCP project details:
-   ```
-   GCP_PROJECT_ID=your-project-id
-   BQ_DATASET=your_dataset
-   GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json
-   ```
-3. Uncheck "Use Demo Data" in the sidebar
+The app runs on built-in mock/demo data by default, which makes it simple to host on GitHub and deploy to Streamlit Cloud without external credentials.
 
 ---
 
@@ -104,9 +96,6 @@ anomaly-detector/
 │
 ├── data/
 │   └── mock_data.py       # Mock data generators for demo
-│
-├── queries/
-│   └── bigquery_client.py # BigQuery connection & queries
 │
 └── utils/
     └── anomaly_detector.py # Anomaly detection algorithms
@@ -151,7 +140,6 @@ If |Z-score| > 2.5 → ANOMALY
 ### Future Enhancements
 - [ ] Slack/Email alerts
 - [ ] Multiple table comparison
-- [ ] BigQuery integration
 - [ ] Gemini AI explanations
 - [ ] Historical anomaly tracking
 - [ ] Custom alert rules
@@ -164,7 +152,7 @@ If |Z-score| > 2.5 → ANOMALY
 |------|------|
 | TBD | Anomaly Detection |
 | TBD | UI/Frontend |
-| TBD | BigQuery Integration |
+| TBD | Monitoring & Reliability |
 
 ---
 

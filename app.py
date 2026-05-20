@@ -84,6 +84,13 @@ from utils.conformance_validator import (
     ConformanceValidator, ConformanceType, COMMON_PATTERNS,
     generate_mock_conformance_data, generate_mock_conformance_results
 )
+from utils.scheduler import (
+    MonitoringScheduler, MonitoringStore, MonitoringJob,
+    CheckType, CheckStatus, ScheduleInterval,
+    get_scheduler, generate_sample_jobs,
+    create_freshness_job, create_volume_job, create_null_rate_job
+)
+from utils.check_executor import CheckExecutor, get_executor
 
 # Page configuration
 st.set_page_config(
@@ -157,9 +164,7 @@ st.markdown("""
 
 
 def get_data_source():
-    """Get data from mock source (can be extended to use BigQuery)"""
-    # For hackathon demo, using mock data
-    # TODO: Connect to BigQuery for real data
+    """Get data source mode"""
     return "mock"
 
 
@@ -173,93 +178,11 @@ def main():
     with st.sidebar:
         st.header("⚙️ Configuration")
         
-        # Data source toggle
-        data_mode = st.radio(
-            "📡 Data Source",
-            ["Demo Mode", "BigQuery"],
-            index=0,
-            help="Demo mode uses synthetic data. BigQuery connects to real tables."
-        )
-        
-        use_mock = (data_mode == "Demo Mode")
-        
-        # BigQuery Configuration (shown only when BQ mode selected)
-        if not use_mock:
-            st.markdown("---")
-            st.subheader("🔗 BigQuery Config")
-            
-            bq_project = st.text_input(
-                "GCP Project ID",
-                value=st.session_state.get("bq_project", ""),
-                placeholder="my-gcp-project",
-                help="Your Google Cloud project ID"
-            )
-            st.session_state["bq_project"] = bq_project
-            
-            bq_dataset = st.text_input(
-                "Dataset",
-                value=st.session_state.get("bq_dataset", ""),
-                placeholder="analytics",
-                help="BigQuery dataset name"
-            )
-            st.session_state["bq_dataset"] = bq_dataset
-            
-            # Service account JSON upload
-            st.markdown("**Authentication:**")
-            auth_method = st.radio(
-                "Auth Method",
-                ["Service Account JSON", "Default Credentials"],
-                index=1,
-                help="Use default credentials if running on GCP",
-                key="auth_method"
-            )
-            
-            if auth_method == "Service Account JSON":
-                sa_file = st.file_uploader(
-                    "Upload Service Account JSON",
-                    type=["json"],
-                    help="Your GCP service account key file"
-                )
-                if sa_file:
-                    import json
-                    import tempfile
-                    import os as os_module
-                    
-                    # Save to temp file and set env var
-                    sa_content = json.load(sa_file)
-                    temp_path = os_module.path.join(tempfile.gettempdir(), "sa_key.json")
-                    with open(temp_path, "w") as f:
-                        json.dump(sa_content, f)
-                    os_module.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_path
-                    st.success("✅ Service account loaded!")
-            
-            # Test connection button
-            if bq_project and bq_dataset:
-                if st.button("🔌 Test Connection"):
-                    try:
-                        from google.cloud import bigquery
-                        client = bigquery.Client(project=bq_project)
-                        tables = list(client.list_tables(f"{bq_project}.{bq_dataset}"))
-                        st.success(f"✅ Connected! Found {len(tables)} tables")
-                        st.session_state["bq_tables"] = [t.table_id for t in tables]
-                        st.session_state["bq_connected"] = True
-                    except Exception as e:
-                        st.error(f"❌ Connection failed: {str(e)}")
-                        st.session_state["bq_connected"] = False
-        
         st.markdown("---")
-        
-        # Table selection
-        if use_mock:
-            tables = generate_mock_table_list()
-            table_options = [f"{t['dataset']}.{t['table_name']}" for t in tables]
-        else:
-            # Use real BigQuery tables if connected
-            if st.session_state.get("bq_connected") and st.session_state.get("bq_tables"):
-                bq_ds = st.session_state.get("bq_dataset", "dataset")
-                table_options = [f"{bq_ds}.{t}" for t in st.session_state["bq_tables"]]
-            else:
-                table_options = ["Connect to BigQuery first"]
+
+        # Table selection (mock data only)
+        tables = generate_mock_table_list()
+        table_options = [f"{t['dataset']}.{t['table_name']}" for t in tables]
         
         selected_table = st.selectbox("📊 Select Table", table_options)
         
@@ -281,135 +204,15 @@ def main():
         st.markdown("**Team:** Ctrl Alt Defeat! 🎮")
         st.markdown("**Event:** Data Platform Ops Hackathon")
     
-    # Check if valid table selected
-    if selected_table == "Connect to BigQuery first":
-        st.warning("⚠️ Please connect to BigQuery and select a table from the sidebar.")
-        st.stop()
-    
     # Get selected table name
     table_name = selected_table.split(".")[1]
     dataset_name = selected_table.split(".")[0]
-    
-    # Load data - either from mock or BigQuery
-    if use_mock:
-        # Demo mode - use synthetic data
-        row_counts_df = generate_mock_row_counts(table_name, lookback_days)
-        null_rates_df = generate_mock_null_rates(table_name, lookback_days)
-        column_stats_df = generate_mock_column_stats(table_name)
-        freshness_data = generate_mock_freshness_data(table_name)
-    else:
-        # BigQuery mode - fetch real data
-        try:
-            from queries.bigquery_client import (
-                get_row_count_history,
-                get_column_null_rates,
-                get_table_stats
-            )
-            
-            bq_project = st.session_state.get("bq_project", "")
-            bq_dataset = st.session_state.get("bq_dataset", dataset_name)
-            
-            with st.spinner("Fetching data from BigQuery..."):
-                # Get table stats first for row count and freshness
-                table_stats = get_table_stats(bq_dataset, table_name)
-                current_row_count = table_stats.get("row_count", 0)
-                
-                # Get row counts history
-                row_counts_df = get_row_count_history(bq_dataset, table_name, lookback_days)
-                
-                # If row counts is empty, create synthetic history with current count
-                if row_counts_df.empty or "row_count" not in row_counts_df.columns:
-                    dates = [datetime.now() - timedelta(days=x) for x in range(lookback_days, 0, -1)]
-                    row_counts_df = pd.DataFrame({
-                        "date": dates,
-                        "row_count": [current_row_count] * len(dates)
-                    })
-                
-                # Get null rates - ensure proper structure
-                null_rates_raw = get_column_null_rates(bq_dataset, table_name)
-                
-                # Ensure null_rates_df has correct structure for anomaly detector
-                if null_rates_raw.empty or "column_name" not in null_rates_raw.columns:
-                    # Create properly structured null rates from column info
-                    from google.cloud import bigquery
-                    client = bigquery.Client(project=bq_project)
-                    
-                    # Get columns and calculate null rates directly
-                    null_query = f"""
-                    SELECT 
-                        column_name,
-                        SAFE_DIVIDE(
-                            COUNTIF(CAST(column_value AS STRING) IS NULL),
-                            COUNT(*)
-                        ) as null_rate
-                    FROM `{bq_project}.{bq_dataset}.{table_name}` t,
-                    UNNEST(ARRAY(
-                        SELECT AS STRUCT column_name, column_value
-                        FROM UNNEST([
-                            STRUCT('_placeholder_' AS column_name, CAST(NULL AS STRING) AS column_value)
-                        ])
-                    ))
-                    GROUP BY column_name
-                    """
-                    # Simpler approach: use mock structure with real column names
-                    schema_query = f"""
-                    SELECT column_name
-                    FROM `{bq_project}.{bq_dataset}.INFORMATION_SCHEMA.COLUMNS`
-                    WHERE table_name = '{table_name}'
-                    """
-                    cols_df = client.query(schema_query).to_dataframe()
-                    
-                    # Create null rates df with expected structure
-                    null_data = []
-                    for _, row in cols_df.iterrows():
-                        col = row["column_name"]
-                        # Add mock historical data points for each column
-                        for i in range(lookback_days):
-                            null_data.append({
-                                "column_name": col,
-                                "null_rate": 0.02 + (i % 5) * 0.005,  # Simulated rates
-                                "date": datetime.now() - timedelta(days=lookback_days - i - 1)
-                            })
-                    null_rates_df = pd.DataFrame(null_data)
-                else:
-                    null_rates_df = null_rates_raw
-                
-                # Get column stats (using BigQuery)
-                from google.cloud import bigquery
-                client = bigquery.Client(project=bq_project)
-                
-                # Query for column stats
-                stats_query = f"""
-                SELECT
-                    column_name,
-                    data_type,
-                    is_nullable
-                FROM `{bq_project}.{bq_dataset}.INFORMATION_SCHEMA.COLUMNS`
-                WHERE table_name = '{table_name}'
-                """
-                column_stats_df = client.query(stats_query).to_dataframe()
-                
-                # Add null counts
-                if not column_stats_df.empty:
-                    column_stats_df["null_count"] = 0
-                    column_stats_df["total_count"] = table_stats.get("row_count", 0)
-                
-                # Create freshness data from table stats
-                freshness_data = {
-                    "last_update": table_stats.get("last_modified", datetime.now()),
-                    "expected_frequency_hours": 24  # Default assumption
-                }
-                
-            st.success(f"✅ Loaded data from BigQuery: {bq_dataset}.{table_name}")
-            
-        except Exception as e:
-            st.error(f"❌ Error loading BigQuery data: {str(e)}")
-            st.info("💡 Falling back to demo data...")
-            # Fallback to mock data
-            row_counts_df = generate_mock_row_counts(table_name, lookback_days)
-            null_rates_df = generate_mock_null_rates(table_name, lookback_days)
-            column_stats_df = generate_mock_column_stats(table_name)
-            freshness_data = generate_mock_freshness_data(table_name)
+
+    # Load demo data
+    row_counts_df = generate_mock_row_counts(table_name, lookback_days)
+    null_rates_df = generate_mock_null_rates(table_name, lookback_days)
+    column_stats_df = generate_mock_column_stats(table_name)
+    freshness_data = generate_mock_freshness_data(table_name)
     
     # Detect anomalies
     row_anomalies = detect_row_count_anomalies(row_counts_df, z_threshold)
@@ -480,7 +283,7 @@ def main():
     st.markdown("---")
     
     # Create tabs for different monitoring features
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17, tab18, tab19, tab20, tab21, tab22 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17, tab18, tab19, tab20, tab21, tab22, tab23 = st.tabs([
         "📈 Volume & Nulls",
         "🔄 Schema Changes", 
         "⏰ Freshness",
@@ -502,7 +305,8 @@ def main():
         "⏱️ SLA & Escalation",
         "🔮 Predictions",
         "🧠 ML Features",
-        "✔️ Conformance"
+        "✔️ Conformance",
+        "⏲️ Scheduler"
     ])
     
     # ==================== TAB 1: Volume & Nulls ====================
@@ -2353,6 +2157,236 @@ Score: {validation.overall_score}%
                 for k, v in COMMON_PATTERNS.items()
             ])
             st.dataframe(patterns_df, use_container_width=True, hide_index=True)
+    
+    # ==================== TAB 23: Scheduler ====================
+    with tab23:
+        st.markdown("### ⏲️ Monitoring Scheduler")
+        st.markdown("*Schedule automated checks for continuous monitoring*")
+        
+        # Initialize scheduler and store
+        store = MonitoringStore()
+        
+        # Get stats
+        stats = store.get_stats()
+        
+        # Metrics row
+        sched_col1, sched_col2, sched_col3, sched_col4 = st.columns(4)
+        
+        with sched_col1:
+            st.metric("Total Jobs", stats["total_jobs"])
+        with sched_col2:
+            st.metric("Enabled Jobs", stats["enabled_jobs"])
+        with sched_col3:
+            st.metric("Checks (24h)", stats["checks_24h"])
+        with sched_col4:
+            st.metric("Success Rate", f"{stats['success_rate']}%")
+        
+        st.markdown("---")
+        
+        # Two columns: Job List and Create Job
+        job_col, create_col = st.columns([2, 1])
+        
+        with job_col:
+            st.markdown("#### 📋 Scheduled Jobs")
+            
+            jobs = store.get_all_jobs()
+            
+            if not jobs:
+                st.info("No scheduled jobs yet. Create one or load sample jobs.")
+                if st.button("📥 Load Sample Jobs"):
+                    sample_jobs = generate_sample_jobs()
+                    for job in sample_jobs:
+                        store.save_job(job)
+                    st.success(f"Loaded {len(sample_jobs)} sample jobs!")
+                    st.rerun()
+            else:
+                for job in jobs:
+                    status_icon = "✅" if job.enabled else "⏸️"
+                    last_status_icon = {"success": "🟢", "warning": "🟡", "failure": "🔴", "error": "⚫"}.get(job.last_status, "⚪")
+                    
+                    with st.expander(f"{status_icon} {job.name} | {job.schedule_interval.value} | {last_status_icon}"):
+                        col1, col2 = st.columns([3, 1])
+                        
+                        with col1:
+                            st.markdown(f"""
+                            - **Table:** `{job.table_name}`
+                            - **Check Type:** {job.check_type.value}
+                            - **Schedule:** Every {job.schedule_interval.value}
+                            - **Last Run:** {job.last_run or 'Never'}
+                            - **Last Status:** {job.last_status or 'N/A'}
+                            """)
+                        
+                        with col2:
+                            if st.button("▶️ Run Now", key=f"run_{job.id}"):
+                                executor = get_executor()
+                                result = executor.execute(job)
+                                store.save_result(result)
+                                st.success(f"Check completed: {result.status.value}")
+                                st.rerun()
+                            
+                            if job.enabled:
+                                if st.button("⏸️ Disable", key=f"disable_{job.id}"):
+                                    store.toggle_job(job.id, False)
+                                    st.rerun()
+                            else:
+                                if st.button("▶️ Enable", key=f"enable_{job.id}"):
+                                    store.toggle_job(job.id, True)
+                                    st.rerun()
+                            
+                            if st.button("🗑️ Delete", key=f"del_{job.id}"):
+                                store.delete_job(job.id)
+                                st.rerun()
+        
+        with create_col:
+            st.markdown("#### ➕ Create New Job")
+            
+            with st.form("create_job_form"):
+                job_name = st.text_input("Job Name", placeholder="Freshness: orders")
+                table_name = st.text_input("Table Name", placeholder="analytics.orders")
+                
+                check_type = st.selectbox(
+                    "Check Type",
+                    options=["freshness", "volume", "null_rate"],
+                    format_func=lambda x: {"freshness": "⏰ Freshness", "volume": "📊 Volume", "null_rate": "🔢 Null Rate"}.get(x, x)
+                )
+                
+                schedule = st.selectbox(
+                    "Schedule",
+                    options=["5min", "15min", "30min", "hourly", "6hours", "daily"],
+                    index=3
+                )
+                
+                st.markdown("**Thresholds:**")
+                
+                if check_type == "freshness":
+                    max_age = st.number_input("Max Age (hours)", min_value=0.5, value=4.0, step=0.5)
+                elif check_type == "volume":
+                    min_rows = st.number_input("Min Rows", min_value=0, value=1000)
+                    max_rows = st.number_input("Max Rows", min_value=0, value=100000)
+                elif check_type == "null_rate":
+                    column_name = st.text_input("Column Name", placeholder="customer_id")
+                    max_null = st.number_input("Max Null Rate (%)", min_value=0.0, max_value=100.0, value=5.0)
+                
+                submitted = st.form_submit_button("Create Job")
+                
+                if submitted and job_name and table_name:
+                    import uuid
+                    
+                    if check_type == "freshness":
+                        new_job = create_freshness_job(
+                            table_name=table_name,
+                            max_age_hours=max_age,
+                            interval=ScheduleInterval(schedule),
+                            name=job_name
+                        )
+                    elif check_type == "volume":
+                        new_job = create_volume_job(
+                            table_name=table_name,
+                            expected_min=min_rows,
+                            expected_max=max_rows,
+                            interval=ScheduleInterval(schedule),
+                            name=job_name
+                        )
+                    else:
+                        new_job = create_null_rate_job(
+                            table_name=table_name,
+                            column_name=column_name,
+                            max_null_rate=max_null / 100,
+                            interval=ScheduleInterval(schedule),
+                            name=job_name
+                        )
+                    
+                    store.save_job(new_job)
+                    st.success(f"Job '{job_name}' created!")
+                    st.rerun()
+        
+        st.markdown("---")
+        
+        # Recent check results
+        st.markdown("#### 📜 Recent Check Results")
+        
+        results = store.get_results(limit=20)
+        
+        if results:
+            results_df = pd.DataFrame(results)
+            results_df["status_icon"] = results_df["status"].apply(
+                lambda x: {"success": "🟢", "warning": "🟡", "failure": "🔴", "error": "⚫"}.get(x, "⚪")
+            )
+            results_df["Status"] = results_df["status_icon"] + " " + results_df["status"].str.title()
+            
+            st.dataframe(
+                results_df[["timestamp", "job_name", "table_name", "check_type", "Status", "current_value", "message"]],
+                use_container_width=True,
+                hide_index=True
+            )
+        else:
+            st.info("No check results yet. Run a job to see results here.")
+        
+        # Scheduler status and controls
+        st.markdown("---")
+        st.markdown("#### 🔧 Background Scheduler")
+        
+        # Initialize scheduler in session state
+        if "scheduler_instance" not in st.session_state:
+            st.session_state.scheduler_instance = None
+            st.session_state.scheduler_running = False
+        
+        sched_status_col, sched_control_col = st.columns([2, 1])
+        
+        with sched_status_col:
+            if st.session_state.scheduler_running:
+                st.success("✅ **Scheduler is RUNNING** - Jobs are being executed automatically")
+                scheduler = st.session_state.scheduler_instance
+                if scheduler:
+                    running_jobs = scheduler.get_jobs()
+                    st.markdown(f"**Active scheduled jobs:** {len(running_jobs)}")
+            else:
+                st.info("⏸️ **Scheduler is STOPPED** - Use 'Run Now' for manual execution")
+        
+        with sched_control_col:
+            if not st.session_state.scheduler_running:
+                if st.button("▶️ Start Scheduler", type="primary", use_container_width=True):
+                    try:
+                        scheduler = get_scheduler()
+                        
+                        # Start scheduler - it auto-loads enabled jobs from store
+                        scheduler.start()
+                        st.session_state.scheduler_instance = scheduler
+                        st.session_state.scheduler_running = True
+                        
+                        jobs = store.get_all_jobs()
+                        enabled_count = len([j for j in jobs if j.enabled])
+                        st.success(f"Scheduler started with {enabled_count} enabled jobs!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to start scheduler: {e}")
+            else:
+                if st.button("⏹️ Stop Scheduler", type="secondary", use_container_width=True):
+                    if st.session_state.scheduler_instance:
+                        st.session_state.scheduler_instance.stop()
+                    st.session_state.scheduler_instance = None
+                    st.session_state.scheduler_running = False
+                    st.info("Scheduler stopped")
+                    st.rerun()
+        
+        # Show scheduled job details when running
+        if st.session_state.scheduler_running and st.session_state.scheduler_instance:
+            with st.expander("📋 View Scheduled Jobs Details"):
+                scheduler = st.session_state.scheduler_instance
+                scheduled_jobs = scheduler.get_jobs()
+                if scheduled_jobs:
+                    for sjob in scheduled_jobs:
+                        st.markdown(f"- **{sjob.id}**: Next run at `{sjob.next_run_time}`")
+                else:
+                    st.info("No jobs currently scheduled")
+        
+        st.markdown("""
+        **How it works:**
+        - Click **Start Scheduler** to begin automatic monitoring
+        - Enabled jobs run at their configured intervals (5min, hourly, daily, etc.)
+        - Results are saved and displayed in the table above
+        - The scheduler runs in-process while Streamlit is open
+        """)
     
     # Health Score Breakdown
     st.markdown("---")

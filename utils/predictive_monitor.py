@@ -449,7 +449,7 @@ def generate_mock_trend_data() -> pd.DataFrame:
     """Generate mock time series data for trend visualization"""
     np.random.seed(42)
     
-    dates = pd.date_range(end=datetime.now(), periods=168, freq="H")  # 7 days
+    dates = pd.date_range(end=datetime.now(), periods=168, freq="h")  # 7 days
     
     # Base pattern with trend and seasonality
     x = np.arange(168)

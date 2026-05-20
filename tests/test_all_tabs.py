@@ -113,6 +113,19 @@ class TestModuleImports:
             generate_mock_conformance_data, generate_mock_conformance_results
         )
         assert True
+    
+    def test_import_scheduler(self):
+        from utils.scheduler import (
+            MonitoringScheduler, MonitoringStore, MonitoringJob,
+            CheckType, CheckStatus, ScheduleInterval,
+            create_freshness_job, create_volume_job, create_null_rate_job,
+            generate_sample_jobs
+        )
+        assert True
+    
+    def test_import_check_executor(self):
+        from utils.check_executor import CheckExecutor, get_executor
+        assert True
 
 
 class TestTab17Incidents:
@@ -485,6 +498,243 @@ class TestTab22Conformance:
         results = generate_mock_conformance_results()
         assert isinstance(results, list)
         assert len(results) > 0
+
+
+class TestTab23Scheduler:
+    """Tests for Tab 23: Scheduler"""
+    
+    def test_check_type_enum(self):
+        from utils.scheduler import CheckType
+        assert CheckType.FRESHNESS.value == "freshness"
+        assert CheckType.VOLUME.value == "volume"
+        assert CheckType.NULL_RATE.value == "null_rate"
+    
+    def test_check_status_enum(self):
+        from utils.scheduler import CheckStatus
+        assert CheckStatus.SUCCESS.value == "success"
+        assert CheckStatus.WARNING.value == "warning"
+        assert CheckStatus.FAILURE.value == "failure"
+    
+    def test_schedule_interval_enum(self):
+        from utils.scheduler import ScheduleInterval
+        assert ScheduleInterval.HOURLY.value == "hourly"
+        assert ScheduleInterval.DAILY.value == "daily"
+    
+    def test_create_freshness_job(self):
+        from utils.scheduler import create_freshness_job, CheckType, ScheduleInterval
+        job = create_freshness_job(
+            table_name="test.table",
+            max_age_hours=4,
+            interval=ScheduleInterval.HOURLY
+        )
+        assert job.table_name == "test.table"
+        assert job.check_type == CheckType.FRESHNESS
+        assert job.max_age_hours == 4
+        assert job.schedule_interval == ScheduleInterval.HOURLY
+    
+    def test_create_volume_job(self):
+        from utils.scheduler import create_volume_job, CheckType
+        job = create_volume_job(
+            table_name="test.table",
+            expected_min=1000,
+            expected_max=10000
+        )
+        assert job.check_type == CheckType.VOLUME
+        assert job.expected_min_rows == 1000
+        assert job.expected_max_rows == 10000
+    
+    def test_create_null_rate_job(self):
+        from utils.scheduler import create_null_rate_job, CheckType
+        job = create_null_rate_job(
+            table_name="test.table",
+            column_name="email",
+            max_null_rate=0.05
+        )
+        assert job.check_type == CheckType.NULL_RATE
+        assert job.column_name == "email"
+        assert job.max_null_rate == 0.05
+    
+    def test_generate_sample_jobs(self):
+        from utils.scheduler import generate_sample_jobs
+        jobs = generate_sample_jobs()
+        assert isinstance(jobs, list)
+        assert len(jobs) >= 3
+    
+    def test_monitoring_store_initialization(self):
+        from utils.scheduler import MonitoringStore
+        import tempfile
+        import os
+        
+        # Use temp directory for test
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test_monitoring.db")
+            store = MonitoringStore(db_path=db_path)
+            assert store is not None
+    
+    def test_monitoring_store_save_and_get_job(self):
+        from utils.scheduler import MonitoringStore, create_freshness_job
+        import tempfile
+        import os
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test_monitoring.db")
+            store = MonitoringStore(db_path=db_path)
+            
+            job = create_freshness_job("test.table", max_age_hours=2)
+            store.save_job(job)
+            
+            retrieved = store.get_job(job.id)
+            assert retrieved is not None
+            assert retrieved.table_name == "test.table"
+    
+    def test_monitoring_store_get_all_jobs(self):
+        from utils.scheduler import MonitoringStore, create_freshness_job, create_volume_job
+        import tempfile
+        import os
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test_monitoring.db")
+            store = MonitoringStore(db_path=db_path)
+            
+            job1 = create_freshness_job("test.table1", max_age_hours=2)
+            job2 = create_volume_job("test.table2", expected_min=100, expected_max=10000)
+            store.save_job(job1)
+            store.save_job(job2)
+            
+            all_jobs = store.get_all_jobs()
+            assert len(all_jobs) == 2
+    
+    def test_monitoring_store_toggle_job(self):
+        from utils.scheduler import MonitoringStore, create_freshness_job
+        import tempfile
+        import os
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test_monitoring.db")
+            store = MonitoringStore(db_path=db_path)
+            
+            job = create_freshness_job("test.table", max_age_hours=2)
+            store.save_job(job)
+            
+            store.toggle_job(job.id, False)
+            updated = store.get_job(job.id)
+            assert updated.enabled == False
+    
+    def test_monitoring_store_delete_job(self):
+        from utils.scheduler import MonitoringStore, create_freshness_job
+        import tempfile
+        import os
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test_monitoring.db")
+            store = MonitoringStore(db_path=db_path)
+            
+            job = create_freshness_job("test.table", max_age_hours=2)
+            store.save_job(job)
+            store.delete_job(job.id)
+            
+            deleted = store.get_job(job.id)
+            assert deleted is None
+    
+    def test_monitoring_store_stats(self):
+        from utils.scheduler import MonitoringStore
+        import tempfile
+        import os
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test_monitoring.db")
+            store = MonitoringStore(db_path=db_path)
+            stats = store.get_stats()
+            
+            assert "total_jobs" in stats
+            assert "enabled_jobs" in stats
+            assert "checks_24h" in stats
+            assert "success_rate" in stats
+    
+    def test_check_executor_initialization(self):
+        from utils.check_executor import CheckExecutor, get_executor
+        executor = get_executor(use_bigquery=False)
+        assert executor is not None
+        assert executor.use_bigquery == False
+    
+    def test_check_executor_freshness_mock(self):
+        from utils.check_executor import get_executor
+        from utils.scheduler import create_freshness_job, CheckStatus
+        
+        executor = get_executor(use_bigquery=False)
+        job = create_freshness_job("test.table", max_age_hours=24)
+        
+        result = executor.execute(job)
+        assert result is not None
+        assert result.job_id == job.id
+        assert result.check_type == "freshness"
+        assert result.status in [CheckStatus.SUCCESS, CheckStatus.WARNING, CheckStatus.FAILURE]
+    
+    def test_check_executor_volume_mock(self):
+        from utils.check_executor import get_executor
+        from utils.scheduler import create_volume_job, CheckStatus
+        
+        executor = get_executor(use_bigquery=False)
+        job = create_volume_job("test.table", expected_min=100, expected_max=10000)
+        
+        result = executor.execute(job)
+        assert result is not None
+        assert result.check_type == "volume"
+    
+    def test_check_executor_null_rate_mock(self):
+        from utils.check_executor import get_executor
+        from utils.scheduler import create_null_rate_job, CheckStatus
+        
+        executor = get_executor(use_bigquery=False)
+        job = create_null_rate_job("test.table", "email", max_null_rate=0.05)
+        
+        result = executor.execute(job)
+        assert result is not None
+        assert result.check_type == "null_rate"
+    
+    def test_monitoring_scheduler_initialization(self):
+        from utils.scheduler import MonitoringScheduler, MonitoringStore
+        import tempfile
+        import os
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test_monitoring.db")
+            store = MonitoringStore(db_path=db_path)
+            scheduler = MonitoringScheduler(store)
+            
+            assert scheduler is not None
+            assert scheduler.is_running() == False
+    
+    def test_monitoring_scheduler_get_jobs_empty(self):
+        from utils.scheduler import MonitoringScheduler, MonitoringStore
+        import tempfile
+        import os
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = os.path.join(tmpdir, "test_monitoring.db")
+            store = MonitoringStore(db_path=db_path)
+            scheduler = MonitoringScheduler(store)
+            
+            # Not running, should return empty
+            jobs = scheduler.get_jobs()
+            assert jobs == []
+    
+    def test_check_result_dataclass(self):
+        from utils.scheduler import CheckResult, CheckStatus
+        from datetime import datetime
+        
+        result = CheckResult(
+            job_id="test-123",
+            job_name="Test Job",
+            table_name="test.table",
+            check_type="freshness",
+            status=CheckStatus.SUCCESS,
+            timestamp=datetime.now().isoformat(),
+            message="All good"
+        )
+        
+        assert result.job_id == "test-123"
+        assert result.status == CheckStatus.SUCCESS
 
 
 class TestIntegration:

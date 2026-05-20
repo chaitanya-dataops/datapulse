@@ -288,7 +288,7 @@ def generate_mock_relationship_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.Da
     orders = pd.DataFrame({
         "order_id": range(1001, 1301),
         "customer_id": np.random.choice(range(1, 110), 300),  # Some orphans (101-109)
-        "order_date": pd.date_range(end=datetime.now(), periods=300, freq="H"),
+        "order_date": pd.date_range(end=datetime.now(), periods=300, freq="h"),
         "total": np.random.uniform(50, 500, 300).round(2)
     })
     

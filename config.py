@@ -6,10 +6,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# BigQuery Settings
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID", "your-project-id")
-BQ_DATASET = os.getenv("BQ_DATASET", "your_dataset")
-
 # Anomaly Detection Thresholds
 Z_SCORE_THRESHOLD = 2.5  # Values beyond 2.5 std deviations are anomalies
 NULL_RATE_THRESHOLD = 0.1  # Alert if null rate exceeds 10%
