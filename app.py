@@ -199,6 +199,32 @@ def main():
                                help="Higher = fewer alerts, Lower = more sensitive")
         null_threshold = st.slider("Null Rate Alert (%)", 1, 20, 5,
                                   help="Alert if null rate exceeds this")
+
+        st.markdown("---")
+        st.subheader("⚡ Quick Jump")
+        if "active_group" not in st.session_state:
+            st.session_state["active_group"] = "core"
+
+        qj_col1, qj_col2 = st.columns(2)
+        with qj_col1:
+            if st.button("🏁 Core", use_container_width=True):
+                st.session_state["active_group"] = "core"
+                st.rerun()
+            if st.button("🛡️ Gov", use_container_width=True):
+                st.session_state["active_group"] = "governance"
+                st.rerun()
+            if st.button("⏲️ Scheduler", use_container_width=True):
+                st.session_state["active_group"] = "scheduler"
+                st.rerun()
+        with qj_col2:
+            if st.button("🤖 ML", use_container_width=True):
+                st.session_state["active_group"] = "ml"
+                st.rerun()
+            if st.button("🚨 Ops", use_container_width=True):
+                st.session_state["active_group"] = "operations"
+                st.rerun()
+
+        st.caption("Jump opens the selected group first.")
         
         st.markdown("---")
         st.markdown("**Team:** Ctrl Alt Defeat! 🎮")
@@ -282,32 +308,78 @@ def main():
     
     st.markdown("---")
     
-    # Create tabs for different monitoring features
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11, tab12, tab13, tab14, tab15, tab16, tab17, tab18, tab19, tab20, tab21, tab22, tab23 = st.tabs([
-        "📈 Volume & Nulls",
-        "🔄 Schema Changes", 
-        "⏰ Freshness",
-        "📊 Distribution",
-        "🔍 Duplicates",
-        "✅ Custom Rules",
-        "🤖 ML Detection",
-        "📋 Column Profiler",
-        "📜 History",
-        "🔔 Alerts",
-        "🔐 PII Detection",
-        "🌐 Data Lineage",
-        "📝 SQL Rules",
-        "📉 Drift Detection",
-        "🔬 Root Cause",
-        "📄 Data Contracts",
-        "🚨 Incidents",
-        "🔗 Relationships",
-        "⏱️ SLA & Escalation",
-        "🔮 Predictions",
-        "🧠 ML Features",
-        "✔️ Conformance",
-        "⏲️ Scheduler"
-    ])
+    st.caption("Navigate by domain first, then open focused features inside each group.")
+
+    group_defs = [
+        ("core", "🏁 Core Quality"),
+        ("ml", "🤖 ML & Forecasting"),
+        ("governance", "🛡️ Governance"),
+        ("operations", "🚨 Operations"),
+        ("scheduler", "⏲️ Scheduler"),
+    ]
+    selected_group = st.session_state.get("active_group", "core")
+    ordered_groups = [
+        next(g for g in group_defs if g[0] == selected_group)
+    ] + [g for g in group_defs if g[0] != selected_group]
+
+    group_tabs = st.tabs([label for _, label in ordered_groups])
+    group_tab_map = {key: tab for (key, _), tab in zip(ordered_groups, group_tabs)}
+
+    with group_tab_map["core"]:
+        st.markdown("### 🏁 Core Quality")
+        st.caption("High-frequency checks used day-to-day.")
+        st.markdown("---")
+        tab3, tab1, tab2, tab6, tab4, tab5 = st.tabs([
+            "⏰ Freshness",
+            "📈 Volume & Nulls",
+            "🔄 Schema Changes",
+            "✅ Custom Rules",
+            "📊 Distribution",
+            "🔍 Duplicates"
+        ])
+
+    with group_tab_map["ml"]:
+        st.markdown("### 🤖 ML & Forecasting")
+        st.caption("Prediction, drift, and explainability workflows.")
+        st.markdown("---")
+        tab20, tab7, tab14, tab15, tab21 = st.tabs([
+            "🔮 Predictions",
+            "🤖 ML Detection",
+            "📉 Drift Detection",
+            "🔬 Root Cause",
+            "🧠 ML Features"
+        ])
+
+    with group_tab_map["governance"]:
+        st.markdown("### 🛡️ Governance")
+        st.caption("Contracts, conformance, lineage, rules, and privacy controls.")
+        st.markdown("---")
+        tab16, tab22, tab13, tab11, tab12 = st.tabs([
+            "📄 Data Contracts",
+            "✔️ Conformance",
+            "📝 SQL Rules",
+            "🔐 PII Detection",
+            "🌐 Data Lineage"
+        ])
+
+    with group_tab_map["operations"]:
+        st.markdown("### 🚨 Operations")
+        st.caption("Operational response, triage, and history.")
+        st.markdown("---")
+        tab17, tab10, tab19, tab9, tab18, tab8 = st.tabs([
+            "🚨 Incidents",
+            "🔔 Alerts",
+            "⏱️ SLA & Escalation",
+            "📜 History",
+            "🔗 Relationships",
+            "📋 Column Profiler"
+        ])
+
+    with group_tab_map["scheduler"]:
+        st.markdown("### ⏲️ Scheduler")
+        st.caption("Continuous monitoring and job orchestration.")
+        st.markdown("---")
+        (tab23,) = st.tabs(["⏲️ Scheduler"])
     
     # ==================== TAB 1: Volume & Nulls ====================
     with tab1:
