@@ -1991,7 +1991,7 @@ Score: {validation.overall_score}%
         
         # Add forecast (simulated)
         last_val = mock_trend_df["value"].iloc[-1]
-        forecast_dates = pd.date_range(start=mock_trend_df["timestamp"].iloc[-1], periods=25, freq="H")[1:]
+        forecast_dates = pd.date_range(start=mock_trend_df["timestamp"].iloc[-1], periods=25, freq="h")[1:]
         forecast_vals = [last_val + i * 0.5 + np.random.normal(0, 2) for i in range(24)]
         
         fig_trend.add_trace(go.Scatter(
